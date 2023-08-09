@@ -8,6 +8,7 @@ package tbls
 
 import (
 	"context"
+	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/x509"
@@ -235,6 +236,57 @@ func TestBenchmark(t *testing.T) {
 
 }
 
+// example usage: go test -bench BenchmarkParallelInvocationEDDSA -run=^$ -cpu=1,2,4,8,16,32,64
+func BenchmarkParallelInvocationEDDSA(b *testing.B) {
+
+	pub, pk, err := ed25519.GenerateKey(nil)
+	assert.NoError(b, err)
+
+	// Sign a message
+	msg := []byte("Three can keep a secret, if two of them are dead.")
+	digest := sha256Digest(msg)
+
+	sig, err := pk.Sign(nil, digest, &ed25519.Options{
+		Context: "Example_ed25519ctx",
+	})
+	assert.NoError(b, err)
+
+	parallelism := 1
+
+	b.Run(fmt.Sprintf("sign-p%d", parallelism), func(b *testing.B) {
+		b.ResetTimer()
+		b.RunParallel(func(pb *testing.PB) {
+			var sig []byte
+			var err error
+			for pb.Next() {
+				sig, err = pk.Sign(nil, digest, &ed25519.Options{
+					Context: "Example_ed25519ctx",
+				})
+				assert.NoError(b, err)
+			}
+			// store results to prevent compiler optimizations
+			gsig = sig
+			gerr = err
+		})
+		b.StopTimer()
+	})
+
+	b.Run(fmt.Sprintf("verify-p%d", parallelism), func(b *testing.B) {
+		b.ResetTimer()
+		b.RunParallel(func(pb *testing.PB) {
+			var err error
+			for pb.Next() {
+				err = ed25519.VerifyWithOptions(pub, msg, sig, &ed25519.Options{
+					Context: "Example_ed25519ctx",
+				})
+			}
+			// store results to prevent compiler optimizations
+			gerr = err
+		})
+		b.StopTimer()
+	})
+}
+
 // example usage: go test -bench BenchmarkParallelInvocation -run=^$ -cpu=1,2,4,8,16,32,64
 func BenchmarkParallelInvocation(b *testing.B) {
 
@@ -289,7 +341,6 @@ func BenchmarkParallelInvocation(b *testing.B) {
 	digest := sha256Digest(msg)
 
 	var signatures [][]byte
-	//var signatureCount uint32
 
 	for _, signer := range thresholdSigners {
 		sig, err := signer.Sign(nil, digest)
@@ -300,7 +351,7 @@ func BenchmarkParallelInvocation(b *testing.B) {
 	pk, err := thresholdSigners[0].ThresholdPK()
 	assert.NoError(b, err)
 
-	var v bls.Verifier
+	var v bls.Verifier2
 	err = v.Init(pk)
 	assert.NoError(b, err)
 
@@ -350,6 +401,7 @@ func BenchmarkParallelInvocation(b *testing.B) {
 
 var gsig []byte
 var gerr error
+var gvalid bool
 
 func keygen(t TestingT, parties []MpcParty, n int) ([][]byte, time.Time) {
 	var wg sync.WaitGroup
